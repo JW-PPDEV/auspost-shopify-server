@@ -66,11 +66,13 @@ async function shopifyAPI(endpoint, method, body) {
 
 app.post('/webhook/order', async function(req, res) {
   var order = req.body;
+  console.log('Order received:', JSON.stringify(order));
   var shipping = order.shipping_address;
   if (!shipping) {
     console.log('No shipping address on order, skipping');
     return res.sendStatus(200);
   }
+  console.log('Shipping address:', JSON.stringify(shipping));
   try {
     var shippingTitle = '';
     if (order.shipping_lines && order.shipping_lines[0]) {
