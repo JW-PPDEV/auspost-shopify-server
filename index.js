@@ -73,6 +73,7 @@ app.post('/webhook/order', async function(req, res) {
     return res.sendStatus(200);
   }
   console.log('Shipping address:', JSON.stringify(shipping));
+  console.log('Sender details:', process.env.SENDER_NAME, process.env.SENDER_ADDRESS, process.env.SENDER_SUBURB, process.env.SENDER_STATE, process.env.SENDER_POSTCODE, process.env.SENDER_PHONE);
   try {
     var shippingTitle = '';
     if (order.shipping_lines && order.shipping_lines[0]) {
