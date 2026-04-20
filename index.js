@@ -40,13 +40,22 @@ app.post('/rates', async (req, res) => {
           postcode: destination.postal_code,
           country: destination.country
         },
-        items: [{
-          weight: totalWeight / 1000, // grams to kg
-          length: 10,
-          width: 10,
-          height: 10,
-          product_id: 'EXP' // Express Post - we can expand this later
-        }]
+        items: [
+          {
+            weight: totalWeight / 1000, // grams to kg
+            length: 10,
+            width: 10,
+            height: 10,
+            product_id: '7E55' // Parcel Post + ATL
+          },
+          {
+            weight: totalWeight / 1000, // grams to kg
+            length: 10,
+            width: 10,
+            height: 10,
+            product_id: '3K55' // Express Post + ATL
+          }
+        ]
       })
     });
 
