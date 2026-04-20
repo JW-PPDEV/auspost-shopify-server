@@ -20,7 +20,12 @@ const auspostHeaders = {
 let shopifyAccessToken = null;
 
 app.get('/', function(req, res) {
-  res.send('AusPost-Shopify server is running!');
+  var shop = req.query.shop;
+  if (shop) {
+    res.send('<html><body><script>window.top.location.href = "https://' + shop + '/admin";</script></body></html>');
+  } else {
+    res.send('AusPost-Shopify server is running!');
+  }
 });
 
 app.get('/auth/callback', async function(req, res) {
