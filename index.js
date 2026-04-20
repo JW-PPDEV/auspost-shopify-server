@@ -19,6 +19,56 @@ const auspostHeaders = {
 
 let shopifyAccessToken = null;
 
+app.get('/test-auspost', async function(req, res) {
+  try {
+    var testPayload = {
+      shipments: [{
+        shipment_reference: 'TEST001',
+        from: {
+          name: process.env.SENDER_NAME,
+          lines: [process.env.SENDER_ADDRESS],
+          suburb: process.env.SENDER_SUBURB,
+          state: process.env.SENDER_STATE,
+          postcode: process.env.SENDER_POSTCODE,
+          country: 'AU',
+          phone: process.env.SENDER_PHONE
+        },
+        to: {
+          name: 'John Wishart',
+          lines: ['12 Holbeach Avenue'],
+          suburb: 'Tempe',
+          state: 'NSW',
+          postcode: '2044',
+          country: 'AU',
+          phone: '0400000000',
+          email: 'test@test.com'
+        },
+        items: [{
+          item_reference: 'item-TEST001',
+          product_id: '7E55',
+          length: 40,
+          width: 30,
+          height: 5,
+          weight: 0.5,
+          authority_to_leave: true
+        }]
+      }]
+    };
+
+    console.log('Test payload:', JSON.stringify(testPayload));
+
+    var response = await fetch(AUSPOST_BASE + '/shipments', {
+      method: 'POST',
+      headers: auspostHeaders,
+      body: JSON.stringify(testPayload)
+    });
+
+    var data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.json({ error: err.message });
+  }
+});
 app.get('/', function(req, res) {
   var shop = req.query.shop;
   if (shop) {
