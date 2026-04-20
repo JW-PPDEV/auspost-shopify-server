@@ -84,42 +84,46 @@ app.post('/webhook/order', async function(req, res) {
     var address2 = shipping.address2 || '';
     var lines = [shipping.address1];
     if (address2) { lines.push(address2); }
+    var shipmentPayload = {
+      shipments: [{
+        shipment_reference: String(order.order_number),
+        sender: {
+          name: process.env.SENDER_NAME,
+          lines: [process.env.SENDER_ADDRESS],
+          suburb: process.env.SENDER_SUBURB,
+          state: process.env.SENDER_STATE,
+          postcode: process.env.SENDER_POSTCODE,
+          country: 'AU',
+          phone: process.env.SENDER_PHONE
+        },
+        receiver: {
+          name: shipping.first_name + ' ' + shipping.last_name,
+          lines: lines,
+          suburb: shipping.city,
+          state: shipping.province_code,
+          postcode: shipping.zip,
+          country: shipping.country_code,
+          phone: shipping.phone || order.phone || '0400000000',
+          email: order.email
+        },
+        items: [{
+          item_reference: 'item-' + order.order_number,
+          product_id: productId,
+          length: 40,
+          width: 30,
+          height: 5,
+          weight: 0.5,
+          authority_to_leave: true
+        }]
+      }]
+    };
+
+    console.log('Sending to AusPost:', JSON.stringify(shipmentPayload));
+
     var shipmentRes = await fetch(AUSPOST_BASE + '/shipments', {
       method: 'POST',
       headers: auspostHeaders,
-      body: JSON.stringify({
-        shipments: [{
-          shipment_reference: String(order.order_number),
-          sender: {
-            name: process.env.SENDER_NAME,
-            lines: [process.env.SENDER_ADDRESS],
-            suburb: process.env.SENDER_SUBURB,
-            state: process.env.SENDER_STATE,
-            postcode: process.env.SENDER_POSTCODE,
-            country: 'AU',
-            phone: process.env.SENDER_PHONE
-          },
-          receiver: {
-            name: shipping.first_name + ' ' + shipping.last_name,
-            lines: lines,
-            suburb: shipping.city,
-            state: shipping.province_code,
-            postcode: shipping.zip,
-            country: shipping.country_code,
-            phone: shipping.phone || order.phone || '0400000000',
-            email: order.email
-          },
-          items: [{
-            item_reference: 'item-' + order.order_number,
-            product_id: productId,
-            length: 40,
-            width: 30,
-            height: 5,
-            weight: 0.5,
-            authority_to_leave: true
-          }]
-        }]
-      })
+      body: JSON.stringify(shipmentPayload)
     });
     var shipmentData = await shipmentRes.json();
     console.log('AusPost shipment created:', JSON.stringify(shipmentData));
