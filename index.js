@@ -9,7 +9,7 @@ const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 
-const AUSPOST_BASE = 'https://digitalapi.auspost.com.au/test/shipping/v1';
+const AUSPOST_BASE = 'https://digitalapi.auspost.com.au/shipping/v1';
 
 const auspostHeaders = {
   'Content-Type': 'application/json',
