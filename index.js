@@ -16,6 +16,7 @@ const auspostHeaders = {
   'Account-Number': AUSPOST_ACCOUNT,
   'Authorization': 'Basic ' + Buffer.from(AUSPOST_API_KEY + ':' + AUSPOST_PASSWORD).toString('base64')
 };
+console.log('AusPost auth check - API Key starts with:', AUSPOST_API_KEY ? AUSPOST_API_KEY.substring(0, 4) : 'MISSING', '| Password starts with:', AUSPOST_PASSWORD ? AUSPOST_PASSWORD.substring(0, 4) : 'MISSING', '| Account:', AUSPOST_ACCOUNT);
 
 let shopifyAccessToken = null;
 
