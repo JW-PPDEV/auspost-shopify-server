@@ -95,15 +95,29 @@ async function deleteAusPostShipment(orderReference) {
 }
 
 app.post('/webhook/order', async function(req, res) {
+  res.sendStatus(200); // Respond immediately to prevent Shopify retries
+
   var order = req.body;
   var shipping = order.shipping_address;
 
   if (!shipping) {
     console.log('No shipping address on order, skipping');
-    return res.sendStatus(200);
+    return;
   }
 
   try {
+    // Check if shipment already exists for this order
+    var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
+    var existingRes = await fetch(AUSPOST_BASE + '/shipments?shipment_reference=' + orderReference, {
+      method: 'GET',
+      headers: auspostHeaders
+    });
+    var existingData = await existingRes.json();
+    if (existingData.shipments && existingData.shipments.length > 0) {
+      console.log('Shipment already exists for order:', orderReference, '- skipping');
+      return;
+    }
+
     var shippingTitle = '';
     if (order.shipping_lines && order.shipping_lines[0]) {
       shippingTitle = order.shipping_lines[0].title;
@@ -148,8 +162,6 @@ app.post('/webhook/order', async function(req, res) {
       itemPayload.authority_to_leave = true;
     }
 
-    var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
-
     var shipmentPayload = {
       shipments: [{
         shipment_reference: orderReference,
@@ -186,11 +198,9 @@ app.post('/webhook/order', async function(req, res) {
 
     var shipmentData = await shipmentRes.json();
     console.log('AusPost shipment created:', JSON.stringify(shipmentData));
-    res.sendStatus(200);
 
   } catch (err) {
     console.error('Order webhook error:', err);
-    res.sendStatus(200);
   }
 });
 
