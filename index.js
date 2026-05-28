@@ -80,8 +80,16 @@ app.post('/webhook/order', async function(req, res) {
     if (order.shipping_lines && order.shipping_lines[0]) {
       shippingTitle = order.shipping_lines[0].title;
     }
+    var destinationCountry = shipping.country_code;
+    var isInternational = destinationCountry !== 'AU';
     var isExpress = shippingTitle.toLowerCase().indexOf('express') !== -1;
-    var productId = isExpress ? '3J55' : '3D55';
+    
+    var productId;
+    if (isInternational) {
+      productId = 'PTI8';
+    } else {
+      productId = isExpress ? '3J55' : '3D55';
+    }
     var address2 = shipping.address2 || '';
     var lines = [shipping.address1];
     if (address2) { lines.push(address2); }
