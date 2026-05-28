@@ -197,6 +197,7 @@ app.post('/webhook/order', async function(req, res) {
 
 // Fulfillment webhook - delete AusPost shipment if fulfilled outside Parcel Send
 app.post('/webhook/fulfillment', async function(req, res) {
+  console.log('Raw fulfillment body:', JSON.stringify(req.body));
   var fulfillment = req.body;
   console.log('Fulfillment paylod:', JSON.stringify(fulfillment));
   var orderNumber = fulfillment.order_number;
