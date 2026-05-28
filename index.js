@@ -1,6 +1,5 @@
 const express = require('express');
 const app = express();
-const fs = require('fs');
 app.use(express.json());
 
 const AUSPOST_API_KEY = process.env.AUSPOST_API_KEY;
@@ -11,7 +10,6 @@ const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 
 const AUSPOST_BASE = 'https://digitalapi.auspost.com.au/shipping/v1';
-const SHIPMENTS_FILE = '/tmp/shipments.json';
 
 const auspostHeaders = {
   'Content-Type': 'application/json',
@@ -20,27 +18,6 @@ const auspostHeaders = {
 };
 
 let shopifyAccessToken = null;
-
-// Helper - load shipments from file
-function loadShipments() {
-  try {
-    if (fs.existsSync(SHIPMENTS_FILE)) {
-      return JSON.parse(fs.readFileSync(SHIPMENTS_FILE, 'utf8'));
-    }
-  } catch (err) {
-    console.error('Error loading shipments file:', err);
-  }
-  return {};
-}
-
-// Helper - save shipments to file
-function saveShipments(shipments) {
-  try {
-    fs.writeFileSync(SHIPMENTS_FILE, JSON.stringify(shipments));
-  } catch (err) {
-    console.error('Error saving shipments file:', err);
-  }
-}
 
 app.get('/', function(req, res) {
   var shop = req.query.shop;
@@ -85,6 +62,36 @@ async function shopifyAPI(endpoint, method, body) {
   if (body) { options.body = JSON.stringify(body); }
   var response = await fetch('https://' + SHOPIFY_STORE + '/admin/api/2026-04' + endpoint, options);
   return response.json();
+}
+
+// Helper - find and delete AusPost shipment by order reference
+async function deleteAusPostShipment(orderReference) {
+  try {
+    var searchRes = await fetch(AUSPOST_BASE + '/shipments?shipment_reference=' + orderReference, {
+      method: 'GET',
+      headers: auspostHeaders
+    });
+    var searchData = await searchRes.json();
+    console.log('AusPost shipment search result:', JSON.stringify(searchData));
+
+    var shipmentId = searchData.shipments && searchData.shipments[0] && searchData.shipments[0].shipment_id;
+
+    if (!shipmentId) {
+      console.log('No AusPost shipment found for reference:', orderReference);
+      return false;
+    }
+
+    var deleteRes = await fetch(AUSPOST_BASE + '/shipments/' + shipmentId, {
+      method: 'DELETE',
+      headers: auspostHeaders
+    });
+    console.log('AusPost shipment deleted for reference:', orderReference, '| Status:', deleteRes.status);
+    return true;
+
+  } catch (err) {
+    console.error('Error deleting AusPost shipment:', err);
+    return false;
+  }
 }
 
 app.post('/webhook/order', async function(req, res) {
@@ -141,9 +148,11 @@ app.post('/webhook/order', async function(req, res) {
       itemPayload.authority_to_leave = true;
     }
 
+    var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
+
     var shipmentPayload = {
       shipments: [{
-        shipment_reference: String(order.order_number),
+        shipment_reference: orderReference,
         from: {
           name: process.env.SENDER_NAME,
           lines: [process.env.SENDER_ADDRESS],
@@ -177,16 +186,6 @@ app.post('/webhook/order', async function(req, res) {
 
     var shipmentData = await shipmentRes.json();
     console.log('AusPost shipment created:', JSON.stringify(shipmentData));
-
-    // Save shipment ID mapped to order number
-    var shipmentId = shipmentData.shipments && shipmentData.shipments[0] && shipmentData.shipments[0].shipment_id;
-    if (shipmentId) {
-      var shipments = loadShipments();
-      shipments[String(order.order_number)] = shipmentId;
-      saveShipments(shipments);
-      console.log('Saved shipment ID ' + shipmentId + ' for order ' + order.order_number);
-    }
-
     res.sendStatus(200);
 
   } catch (err) {
@@ -197,40 +196,35 @@ app.post('/webhook/order', async function(req, res) {
 
 // Fulfillment webhook - delete AusPost shipment if fulfilled outside Parcel Send
 app.post('/webhook/fulfillment', async function(req, res) {
-  console.log('Raw fulfillment body:', JSON.stringify(req.body));
   var fulfillment = req.body;
-  console.log('Fulfillment paylod:', JSON.stringify(fulfillment));
-  var orderNumber = fulfillment.name ? fulfillment.name.replace('#', '').replace('PP', '').split('.')[0] : null;
-
-  console.log('Fulfillment received for order:', orderNumber);
-
-  try {
-    var shipments = loadShipments();
-    var shipmentId = shipments[String(orderNumber)];
-
-    if (!shipmentId) {
-      console.log('No AusPost shipment found for order:', orderNumber);
-      return res.sendStatus(200);
-    }
-
-    // Delete the shipment from AusPost
-    var deleteRes = await fetch(AUSPOST_BASE + '/shipments/' + shipmentId, {
-      method: 'DELETE',
-      headers: auspostHeaders
-    });
-
-    console.log('AusPost shipment deleted for order:', orderNumber, '| Status:', deleteRes.status);
-
-    // Remove from our records
-    delete shipments[String(orderNumber)];
-    saveShipments(shipments);
-
-    res.sendStatus(200);
-
-  } catch (err) {
-    console.error('Fulfillment webhook error:', err);
-    res.sendStatus(200);
+  var orderReference = fulfillment.name ? fulfillment.name.replace('#', '').split('.')[0] : null;
+  console.log('Fulfillment received for order:', orderReference);
+  if (orderReference) {
+    await deleteAusPostShipment(orderReference);
   }
+  res.sendStatus(200);
+});
+
+// Order cancelled webhook
+app.post('/webhook/order-cancelled', async function(req, res) {
+  var order = req.body;
+  var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
+  console.log('Order cancelled:', orderReference);
+  if (orderReference) {
+    await deleteAusPostShipment(orderReference);
+  }
+  res.sendStatus(200);
+});
+
+// Order deleted webhook
+app.post('/webhook/order-deleted', async function(req, res) {
+  var order = req.body;
+  var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
+  console.log('Order deleted:', orderReference);
+  if (orderReference) {
+    await deleteAusPostShipment(orderReference);
+  }
+  res.sendStatus(200);
 });
 
 app.post('/webhook/tracking', async function(req, res) {
