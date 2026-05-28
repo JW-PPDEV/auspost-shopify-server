@@ -122,10 +122,25 @@ app.post('/webhook/order', async function(req, res) {
           width: 30,
           height: 5,
           weight: 0.5,
-          authority_to_leave: true
-        }]
-      }]
-    };
+          items: [{
+            item_reference: 'item-' + order.order_number,
+            product_id: productId,
+            length: 40,
+            width: 30,
+            height: 5,
+            weight: 0.5,
+            authority_to_leave: isInternational ? false : true,
+            commercial_value: isInternational ? true : undefined,
+            classification_type: isInternational ? 'SALE_OF_GOODS' : undefined,
+            item_contents: isInternational ? [{
+              description: 'Clothing',
+              quantity: 1,
+              weight: 0.5,
+              value: parseFloat(order.total_price) || 50,
+              country_of_origin: 'AU',
+              hs_tariff_code: ''
+            }] : undefined
+          }]
 
     console.log('Sending to AusPost:', JSON.stringify(shipmentPayload));
 
