@@ -198,6 +198,15 @@ app.post('/webhook/order', async function(req, res) {
 app.post('/webhook/fulfillment', async function(req, res) {
   var fulfillment = req.body;
   console.log('Fulfillment name field:', fulfillment.name);
+  console.log('Fulfillment tracking company:', fulfillment.tracking_company);
+
+  // Only delete if NOT fulfilled by Australia Post (i.e. fulfilled outside Parcel Send)
+  var trackingCompany = fulfillment.tracking_company || '';
+  if (trackingCompany.toLowerCase().indexOf('australia post') !== -1) {
+    console.log('Fulfillment is from Australia Post/Parcel Send - skipping deletion');
+    return res.sendStatus(200);
+  }
+
   var orderReference = fulfillment.name ? fulfillment.name.replace('#', '').split('.')[0] : null;
   console.log('Fulfillment received for order:', orderReference);
   if (orderReference) {
