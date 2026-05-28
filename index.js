@@ -93,6 +93,33 @@ async function deleteProcessedOrder(orderReference) {
   }
 }
 
+// Helper - get all unfulfilled processed orders
+async function getUnfulfilledOrders() {
+  try {
+    var res = await fetch(SUPABASE_URL + '/rest/v1/processed_orders?select=order_reference,shipment_id&fulfilled=eq.false', {
+      headers: supabaseHeaders
+    });
+    var data = await res.json();
+    return data || [];
+  } catch (err) {
+    console.error('Error getting unfulfilled orders:', err);
+    return [];
+  }
+}
+
+// Helper - mark order as fulfilled in Supabase
+async function markOrderFulfilled(orderReference) {
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/processed_orders?order_reference=eq.' + orderReference, {
+      method: 'PATCH',
+      headers: supabaseHeaders,
+      body: JSON.stringify({ fulfilled: true })
+    });
+  } catch (err) {
+    console.error('Error marking order fulfilled:', err);
+  }
+}
+
 // Load Shopify token from Supabase on startup
 async function loadShopifyToken() {
   var token = await getSetting('shopify_access_token');
@@ -105,38 +132,6 @@ async function loadShopifyToken() {
 }
 
 loadShopifyToken();
-
-app.get('/', function(req, res) {
-  var shop = req.query.shop;
-  if (shop) {
-    res.send('<html><body><script>window.top.location.href = "https://' + shop + '/admin";</script></body></html>');
-  } else {
-    res.send('AusPost-Shopify server is running!');
-  }
-});
-
-app.get('/auth/callback', async function(req, res) {
-  var code = req.query.code;
-  try {
-    var response = await fetch('https://' + SHOPIFY_STORE + '/admin/oauth/access_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        client_id: SHOPIFY_CLIENT_ID,
-        client_secret: SHOPIFY_CLIENT_SECRET,
-        code: code
-      })
-    });
-    var data = await response.json();
-    shopifyAccessToken = data.access_token;
-    await saveSetting('shopify_access_token', shopifyAccessToken);
-    console.log('Shopify access token obtained and saved to Supabase');
-    res.send('Shopify connected successfully! You can close this window.');
-  } catch (err) {
-    console.error('Auth error:', err);
-    res.send('Auth failed - check your logs');
-  }
-});
 
 async function shopifyAPI(endpoint, method, body) {
   if (!method) { method = 'GET'; }
@@ -183,8 +178,125 @@ async function deleteAusPostShipment(orderReference) {
   }
 }
 
+// Background polling job - check for printed labels and update Shopify
+async function pollForPrintedLabels() {
+  console.log('Polling for printed labels...');
+
+  if (!shopifyAccessToken) {
+    console.log('No Shopify token available - skipping poll');
+    return;
+  }
+
+  try {
+    var orders = await getUnfulfilledOrders();
+    console.log('Unfulfilled orders to check:', orders.length);
+
+    for (var i = 0; i < orders.length; i++) {
+      var orderRef = orders[i].order_reference;
+
+      try {
+        // Get shipment from AusPost
+        var shipmentRes = await fetch(AUSPOST_BASE + '/shipments?shipment_reference=' + orderRef, {
+          method: 'GET',
+          headers: auspostHeaders
+        });
+        var shipmentData = await shipmentRes.json();
+        var shipment = shipmentData.shipments && shipmentData.shipments[0];
+
+        if (!shipment) {
+          console.log('No shipment found for:', orderRef);
+          continue;
+        }
+
+        var status = shipment.shipment_summary && shipment.shipment_summary.status;
+        var trackingNumber = shipment.items && shipment.items[0] && shipment.items[0].tracking_details && shipment.items[0].tracking_details.article_id;
+
+        console.log('Order:', orderRef, '| Status:', status, '| Tracking:', trackingNumber);
+
+        // If label has been printed (status is Initiated or beyond)
+        if (status && status !== 'Created' && trackingNumber) {
+          // Find Shopify order
+          var ordersData = await shopifyAPI('/orders.json?name=' + encodeURIComponent('#' + orderRef) + '&status=any');
+          var shopifyOrder = ordersData.orders && ordersData.orders[0];
+
+          if (!shopifyOrder) {
+            console.log('Shopify order not found for:', orderRef);
+            continue;
+          }
+
+          // Check if already fulfilled in Shopify
+          if (shopifyOrder.fulfillment_status === 'fulfilled') {
+            console.log('Order already fulfilled in Shopify:', orderRef);
+            await markOrderFulfilled(orderRef);
+            continue;
+          }
+
+          // Create fulfillment with tracking
+          var fulfillmentRes = await shopifyAPI('/orders/' + shopifyOrder.id + '/fulfillments.json', 'POST', {
+            fulfillment: {
+              tracking_number: trackingNumber,
+              tracking_company: 'Australia Post',
+              tracking_url: 'https://auspost.com.au/mypost/track/#/details/' + trackingNumber,
+              notify_customer: true
+            }
+          });
+
+          console.log('Fulfillment created for order:', orderRef, '| Tracking:', trackingNumber);
+          await markOrderFulfilled(orderRef);
+        }
+
+      } catch (err) {
+        console.error('Error processing order:', orderRef, err);
+      }
+
+      // Small delay between orders to avoid rate limiting
+      await new Promise(function(resolve) { setTimeout(resolve, 500); });
+    }
+
+  } catch (err) {
+    console.error('Polling error:', err);
+  }
+}
+
+// Run polling every 5 minutes
+setInterval(pollForPrintedLabels, 5 * 60 * 1000);
+// Also run once on startup after a short delay
+setTimeout(pollForPrintedLabels, 10000);
+
+app.get('/', function(req, res) {
+  var shop = req.query.shop;
+  if (shop) {
+    res.send('<html><body><script>window.top.location.href = "https://' + shop + '/admin";</script></body></html>');
+  } else {
+    res.send('AusPost-Shopify server is running!');
+  }
+});
+
+app.get('/auth/callback', async function(req, res) {
+  var code = req.query.code;
+  try {
+    var response = await fetch('https://' + SHOPIFY_STORE + '/admin/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: SHOPIFY_CLIENT_ID,
+        client_secret: SHOPIFY_CLIENT_SECRET,
+        code: code
+      })
+    });
+    var data = await response.json();
+    shopifyAccessToken = data.access_token;
+    await saveSetting('shopify_access_token', shopifyAccessToken);
+    console.log('Shopify access token obtained and saved to Supabase');
+    res.send('Shopify connected successfully! You can close this window.');
+  } catch (err) {
+    console.error('Auth error:', err);
+    res.send('Auth failed - check your logs');
+  }
+});
+
 app.post('/webhook/order', async function(req, res) {
-  res.sendStatus(200); // Respond immediately to prevent Shopify retries
+  res.sendStatus(200);
 
   var order = req.body;
   var shipping = order.shipping_address;
@@ -197,7 +309,6 @@ app.post('/webhook/order', async function(req, res) {
   try {
     var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
 
-    // Check if already processed in Supabase
     var alreadyProcessed = await isOrderProcessed(orderReference);
     if (alreadyProcessed) {
       console.log('Order already processed:', orderReference, '- skipping');
@@ -285,7 +396,6 @@ app.post('/webhook/order', async function(req, res) {
     var shipmentData = await shipmentRes.json();
     console.log('AusPost shipment created:', JSON.stringify(shipmentData));
 
-    // Save to Supabase
     var shipmentId = shipmentData.shipments && shipmentData.shipments[0] && shipmentData.shipments[0].shipment_id;
     await saveProcessedOrder(orderReference, shipmentId || '');
 
@@ -294,7 +404,6 @@ app.post('/webhook/order', async function(req, res) {
   }
 });
 
-// Fulfillment webhook - delete AusPost shipment if fulfilled outside Parcel Send
 app.post('/webhook/fulfillment', async function(req, res) {
   var fulfillment = req.body;
   console.log('Fulfillment name field:', fulfillment.name);
@@ -314,7 +423,6 @@ app.post('/webhook/fulfillment', async function(req, res) {
   res.sendStatus(200);
 });
 
-// Order cancelled webhook
 app.post('/webhook/order-cancelled', async function(req, res) {
   var order = req.body;
   var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
@@ -325,7 +433,6 @@ app.post('/webhook/order-cancelled', async function(req, res) {
   res.sendStatus(200);
 });
 
-// Order deleted webhook
 app.post('/webhook/order-deleted', async function(req, res) {
   var order = req.body;
   var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
