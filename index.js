@@ -16,6 +16,7 @@ const auspostHeaders = {
   'Account-Number': AUSPOST_ACCOUNT,
   'Authorization': 'Basic ' + Buffer.from(AUSPOST_API_KEY + ':' + AUSPOST_PASSWORD).toString('base64')
 };
+
 console.log('AusPost auth check - API Key starts with:', AUSPOST_API_KEY ? AUSPOST_API_KEY.substring(0, 4) : 'MISSING', '| Password starts with:', AUSPOST_PASSWORD ? AUSPOST_PASSWORD.substring(0, 4) : 'MISSING', '| Account:', AUSPOST_ACCOUNT);
 
 let shopifyAccessToken = null;
@@ -67,32 +68,58 @@ async function shopifyAPI(endpoint, method, body) {
 
 app.post('/webhook/order', async function(req, res) {
   var order = req.body;
-  console.log('Order received:', JSON.stringify(order));
   var shipping = order.shipping_address;
+
   if (!shipping) {
     console.log('No shipping address on order, skipping');
     return res.sendStatus(200);
   }
-  console.log('Shipping address:', JSON.stringify(shipping));
-  console.log('Sender details:', process.env.SENDER_NAME, process.env.SENDER_ADDRESS, process.env.SENDER_SUBURB, process.env.SENDER_STATE, process.env.SENDER_POSTCODE, process.env.SENDER_PHONE);
+
   try {
     var shippingTitle = '';
     if (order.shipping_lines && order.shipping_lines[0]) {
       shippingTitle = order.shipping_lines[0].title;
     }
+
     var destinationCountry = shipping.country_code;
     var isInternational = destinationCountry !== 'AU';
     var isExpress = shippingTitle.toLowerCase().indexOf('express') !== -1;
-    
+
     var productId;
     if (isInternational) {
       productId = 'PTI8';
     } else {
       productId = isExpress ? '3J55' : '3D55';
     }
+
     var address2 = shipping.address2 || '';
     var lines = [shipping.address1];
     if (address2) { lines.push(address2); }
+
+    var itemPayload = {
+      item_reference: 'item-' + order.order_number,
+      product_id: productId,
+      length: 40,
+      width: 30,
+      height: 5,
+      weight: 0.5
+    };
+
+    if (isInternational) {
+      itemPayload.commercial_value = true;
+      itemPayload.classification_type = 'SALE_OF_GOODS';
+      itemPayload.item_contents = [{
+        description: 'Clothing',
+        quantity: 1,
+        weight: 0.5,
+        value: parseFloat(order.total_price) || 50,
+        country_of_origin: 'AU',
+        hs_tariff_code: ''
+      }];
+    } else {
+      itemPayload.authority_to_leave = true;
+    }
+
     var shipmentPayload = {
       shipments: [{
         shipment_reference: String(order.order_number),
@@ -115,26 +142,8 @@ app.post('/webhook/order', async function(req, res) {
           phone: shipping.phone || order.phone || '0400000000',
           email: order.email
         },
-        items: [{
-          item_reference: 'item-' + order.order_number,
-          product_id: productId,
-          length: 40,
-          width: 30,
-          height: 5,
-          weight: 0.5,
-          authority_to_leave: isInternational ? false : true,
-          commercial_value: isInternational ? true : undefined,
-          classification_type: isInternational ? 'SALE_OF_GOODS' : undefined,
-          item_contents: isInternational ? [{
-            description: 'Clothing',
-            quantity: 1,
-            weight: 0.5,
-            value: parseFloat(order.total_price) || 50,
-            country_of_origin: 'AU',
-            hs_tariff_code: ''
-          }] : undefined
-        }]
-      })
+        items: [itemPayload]
+      }]
     };
 
     console.log('Sending to AusPost:', JSON.stringify(shipmentPayload));
@@ -144,9 +153,11 @@ app.post('/webhook/order', async function(req, res) {
       headers: auspostHeaders,
       body: JSON.stringify(shipmentPayload)
     });
+
     var shipmentData = await shipmentRes.json();
     console.log('AusPost shipment created:', JSON.stringify(shipmentData));
     res.sendStatus(200);
+
   } catch (err) {
     console.error('Order webhook error:', err);
     res.sendStatus(200);
@@ -156,17 +167,21 @@ app.post('/webhook/order', async function(req, res) {
 app.post('/webhook/tracking', async function(req, res) {
   var tracking_number = req.body.tracking_number;
   var order_number = req.body.order_number;
+
   if (!shopifyAccessToken) {
     console.error('No Shopify access token available');
     return res.sendStatus(500);
   }
+
   try {
     var ordersData = await shopifyAPI('/orders.json?name=' + order_number + '&status=any');
     var order = ordersData.orders && ordersData.orders[0];
+
     if (!order) {
       console.error('Order not found:', order_number);
       return res.sendStatus(404);
     }
+
     await shopifyAPI('/orders/' + order.id + '/fulfillments.json', 'POST', {
       fulfillment: {
         tracking_number: tracking_number,
@@ -175,8 +190,10 @@ app.post('/webhook/tracking', async function(req, res) {
         notify_customer: true
       }
     });
+
     console.log('Tracking ' + tracking_number + ' added to order ' + order_number);
     res.sendStatus(200);
+
   } catch (err) {
     console.error('Tracking webhook error:', err);
     res.sendStatus(500);
