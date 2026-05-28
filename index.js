@@ -8,6 +8,8 @@ const AUSPOST_ACCOUNT = process.env.AUSPOST_ACCOUNT;
 const SHOPIFY_CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
 const AUSPOST_BASE = 'https://digitalapi.auspost.com.au/shipping/v1';
 
@@ -17,7 +19,92 @@ const auspostHeaders = {
   'Authorization': 'Basic ' + Buffer.from(AUSPOST_API_KEY + ':' + AUSPOST_PASSWORD).toString('base64')
 };
 
+const supabaseHeaders = {
+  'Content-Type': 'application/json',
+  'apikey': SUPABASE_KEY,
+  'Authorization': 'Bearer ' + SUPABASE_KEY
+};
+
 let shopifyAccessToken = null;
+
+// Helper - get value from Supabase settings table
+async function getSetting(key) {
+  try {
+    var res = await fetch(SUPABASE_URL + '/rest/v1/settings?key=eq.' + key + '&select=value', {
+      headers: supabaseHeaders
+    });
+    var data = await res.json();
+    return data && data[0] ? data[0].value : null;
+  } catch (err) {
+    console.error('Error getting setting:', err);
+    return null;
+  }
+}
+
+// Helper - save value to Supabase settings table
+async function saveSetting(key, value) {
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/settings?key=eq.' + key, {
+      method: 'PATCH',
+      headers: supabaseHeaders,
+      body: JSON.stringify({ value: value, updated_at: new Date().toISOString() })
+    });
+  } catch (err) {
+    console.error('Error saving setting:', err);
+  }
+}
+
+// Helper - check if order already processed
+async function isOrderProcessed(orderReference) {
+  try {
+    var res = await fetch(SUPABASE_URL + '/rest/v1/processed_orders?order_reference=eq.' + orderReference + '&select=order_reference', {
+      headers: supabaseHeaders
+    });
+    var data = await res.json();
+    return data && data.length > 0;
+  } catch (err) {
+    console.error('Error checking processed order:', err);
+    return false;
+  }
+}
+
+// Helper - save processed order
+async function saveProcessedOrder(orderReference, shipmentId) {
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/processed_orders', {
+      method: 'POST',
+      headers: Object.assign({}, supabaseHeaders, { 'Prefer': 'resolution=merge-duplicates' }),
+      body: JSON.stringify({ order_reference: orderReference, shipment_id: shipmentId })
+    });
+  } catch (err) {
+    console.error('Error saving processed order:', err);
+  }
+}
+
+// Helper - delete processed order record
+async function deleteProcessedOrder(orderReference) {
+  try {
+    await fetch(SUPABASE_URL + '/rest/v1/processed_orders?order_reference=eq.' + orderReference, {
+      method: 'DELETE',
+      headers: supabaseHeaders
+    });
+  } catch (err) {
+    console.error('Error deleting processed order:', err);
+  }
+}
+
+// Load Shopify token from Supabase on startup
+async function loadShopifyToken() {
+  var token = await getSetting('shopify_access_token');
+  if (token) {
+    shopifyAccessToken = token;
+    console.log('Shopify access token loaded from Supabase');
+  } else {
+    console.log('No Shopify access token found in Supabase');
+  }
+}
+
+loadShopifyToken();
 
 app.get('/', function(req, res) {
   var shop = req.query.shop;
@@ -42,7 +129,8 @@ app.get('/auth/callback', async function(req, res) {
     });
     var data = await response.json();
     shopifyAccessToken = data.access_token;
-    console.log('Shopify access token obtained successfully');
+    await saveSetting('shopify_access_token', shopifyAccessToken);
+    console.log('Shopify access token obtained and saved to Supabase');
     res.send('Shopify connected successfully! You can close this window.');
   } catch (err) {
     console.error('Auth error:', err);
@@ -86,6 +174,7 @@ async function deleteAusPostShipment(orderReference) {
       headers: auspostHeaders
     });
     console.log('AusPost shipment deleted for reference:', orderReference, '| Status:', deleteRes.status);
+    await deleteProcessedOrder(orderReference);
     return true;
 
   } catch (err) {
@@ -106,15 +195,12 @@ app.post('/webhook/order', async function(req, res) {
   }
 
   try {
-    // Check if shipment already exists for this order
     var orderReference = order.name ? order.name.replace('#', '') : String(order.order_number);
-    var existingRes = await fetch(AUSPOST_BASE + '/shipments?shipment_reference=' + orderReference, {
-      method: 'GET',
-      headers: auspostHeaders
-    });
-    var existingData = await existingRes.json();
-    if (existingData.shipments && existingData.shipments.length > 0) {
-      console.log('Shipment already exists for order:', orderReference, '- skipping');
+
+    // Check if already processed in Supabase
+    var alreadyProcessed = await isOrderProcessed(orderReference);
+    if (alreadyProcessed) {
+      console.log('Order already processed:', orderReference, '- skipping');
       return;
     }
 
@@ -199,6 +285,10 @@ app.post('/webhook/order', async function(req, res) {
     var shipmentData = await shipmentRes.json();
     console.log('AusPost shipment created:', JSON.stringify(shipmentData));
 
+    // Save to Supabase
+    var shipmentId = shipmentData.shipments && shipmentData.shipments[0] && shipmentData.shipments[0].shipment_id;
+    await saveProcessedOrder(orderReference, shipmentId || '');
+
   } catch (err) {
     console.error('Order webhook error:', err);
   }
@@ -210,7 +300,6 @@ app.post('/webhook/fulfillment', async function(req, res) {
   console.log('Fulfillment name field:', fulfillment.name);
   console.log('Fulfillment tracking company:', fulfillment.tracking_company);
 
-  // Only delete if NOT fulfilled by Australia Post (i.e. fulfilled outside Parcel Send)
   var trackingCompany = fulfillment.tracking_company || '';
   if (trackingCompany.toLowerCase().indexOf('australia post') !== -1) {
     console.log('Fulfillment is from Australia Post/Parcel Send - skipping deletion');
