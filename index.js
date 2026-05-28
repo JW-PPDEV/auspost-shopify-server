@@ -200,7 +200,7 @@ app.post('/webhook/fulfillment', async function(req, res) {
   console.log('Raw fulfillment body:', JSON.stringify(req.body));
   var fulfillment = req.body;
   console.log('Fulfillment paylod:', JSON.stringify(fulfillment));
-  var orderNumber = fulfillment.order_number;
+  var orderNumber = fulfillment.name ? fulfillment.name.replace('#', '').split('.')[0] : null;
 
   console.log('Fulfillment received for order:', orderNumber);
 
