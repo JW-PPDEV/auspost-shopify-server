@@ -1,5 +1,6 @@
 const express = require('express');
 const app = express();
+const fs = require('fs');
 app.use(express.json());
 
 const AUSPOST_API_KEY = process.env.AUSPOST_API_KEY;
@@ -10,6 +11,7 @@ const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 
 const AUSPOST_BASE = 'https://digitalapi.auspost.com.au/shipping/v1';
+const SHIPMENTS_FILE = '/tmp/shipments.json';
 
 const auspostHeaders = {
   'Content-Type': 'application/json',
@@ -17,9 +19,28 @@ const auspostHeaders = {
   'Authorization': 'Basic ' + Buffer.from(AUSPOST_API_KEY + ':' + AUSPOST_PASSWORD).toString('base64')
 };
 
-console.log('AusPost auth check - API Key starts with:', AUSPOST_API_KEY ? AUSPOST_API_KEY.substring(0, 4) : 'MISSING', '| Password starts with:', AUSPOST_PASSWORD ? AUSPOST_PASSWORD.substring(0, 4) : 'MISSING', '| Account:', AUSPOST_ACCOUNT);
-
 let shopifyAccessToken = null;
+
+// Helper - load shipments from file
+function loadShipments() {
+  try {
+    if (fs.existsSync(SHIPMENTS_FILE)) {
+      return JSON.parse(fs.readFileSync(SHIPMENTS_FILE, 'utf8'));
+    }
+  } catch (err) {
+    console.error('Error loading shipments file:', err);
+  }
+  return {};
+}
+
+// Helper - save shipments to file
+function saveShipments(shipments) {
+  try {
+    fs.writeFileSync(SHIPMENTS_FILE, JSON.stringify(shipments));
+  } catch (err) {
+    console.error('Error saving shipments file:', err);
+  }
+}
 
 app.get('/', function(req, res) {
   var shop = req.query.shop;
@@ -156,10 +177,56 @@ app.post('/webhook/order', async function(req, res) {
 
     var shipmentData = await shipmentRes.json();
     console.log('AusPost shipment created:', JSON.stringify(shipmentData));
+
+    // Save shipment ID mapped to order number
+    var shipmentId = shipmentData.shipments && shipmentData.shipments[0] && shipmentData.shipments[0].shipment_id;
+    if (shipmentId) {
+      var shipments = loadShipments();
+      shipments[String(order.order_number)] = shipmentId;
+      saveShipments(shipments);
+      console.log('Saved shipment ID ' + shipmentId + ' for order ' + order.order_number);
+    }
+
     res.sendStatus(200);
 
   } catch (err) {
     console.error('Order webhook error:', err);
+    res.sendStatus(200);
+  }
+});
+
+// Fulfillment webhook - delete AusPost shipment if fulfilled outside Parcel Send
+app.post('/webhook/fulfillment', async function(req, res) {
+  var fulfillment = req.body;
+  var orderNumber = fulfillment.order_number;
+
+  console.log('Fulfillment received for order:', orderNumber);
+
+  try {
+    var shipments = loadShipments();
+    var shipmentId = shipments[String(orderNumber)];
+
+    if (!shipmentId) {
+      console.log('No AusPost shipment found for order:', orderNumber);
+      return res.sendStatus(200);
+    }
+
+    // Delete the shipment from AusPost
+    var deleteRes = await fetch(AUSPOST_BASE + '/shipments/' + shipmentId, {
+      method: 'DELETE',
+      headers: auspostHeaders
+    });
+
+    console.log('AusPost shipment deleted for order:', orderNumber, '| Status:', deleteRes.status);
+
+    // Remove from our records
+    delete shipments[String(orderNumber)];
+    saveShipments(shipments);
+
+    res.sendStatus(200);
+
+  } catch (err) {
+    console.error('Fulfillment webhook error:', err);
     res.sendStatus(200);
   }
 });
