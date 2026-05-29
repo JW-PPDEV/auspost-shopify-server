@@ -258,10 +258,9 @@ async function pollForPrintedLabels() {
   }
 }
 
-// Run polling every 5 minutes
-setInterval(pollForPrintedLabels, 5 * 60 * 1000);
-// Also run once on startup after a short delay
-setTimeout(pollForPrintedLabels, 10000);
+// Polling paused - needs investigation
+// setInterval(pollForPrintedLabels, 5 * 60 * 1000);
+// setTimeout(pollForPrintedLabels, 10000);
 
 app.get('/', function(req, res) {
   var shop = req.query.shop;
