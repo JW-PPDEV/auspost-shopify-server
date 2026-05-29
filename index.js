@@ -188,39 +188,57 @@ async function pollForPrintedLabels() {
   }
 
   try {
-    var orders = await getUnfulfilledOrders();
+    // Get all unfulfilled orders from Supabase
+    var res = await fetch(SUPABASE_URL + '/rest/v1/processed_orders?fulfilled=eq.false&select=order_reference,shipment_id', {
+      headers: supabaseHeaders
+    });
+    var orders = await res.json();
+
+    if (!orders || orders.length === 0) {
+      console.log('No unfulfilled orders to check');
+      return;
+    }
+
     console.log('Unfulfilled orders to check:', orders.length);
 
     for (var i = 0; i < orders.length; i++) {
       var orderRef = orders[i].order_reference;
+      var shipmentId = orders[i].shipment_id;
+
+      if (!shipmentId) {
+        console.log('No shipment ID for order:', orderRef, '- skipping');
+        continue;
+      }
 
       try {
-        // Get shipment from AusPost
-        var shipmentRes = await fetch(AUSPOST_BASE + '/shipments?shipment_reference=' + orderRef, {
+        // Look up shipment directly by shipment_id
+        var shipmentRes = await fetch(AUSPOST_BASE + '/shipments/' + shipmentId, {
           method: 'GET',
           headers: auspostHeaders
         });
         var shipmentData = await shipmentRes.json();
-        var shipment = shipmentData.shipments && shipmentData.shipments[0];
+        var shipment = shipmentData;
 
-        if (!shipment) {
-          console.log('No shipment found for:', orderRef);
+        if (!shipment || !shipment.shipment_id) {
+          console.log('No shipment found for ID:', shipmentId);
           continue;
         }
 
-        var status = shipment.shipment_summary && shipment.shipment_summary.status;
-        var trackingNumber = shipment.items && shipment.items[0] && shipment.items[0].tracking_details && shipment.items[0].tracking_details.article_id;
+        var item = shipment.items && shipment.items[0];
+        var labelStatus = item && item.label && item.label.status;
+        var trackingNumber = item && item.tracking_details && item.tracking_details.article_id;
 
-        console.log('Order:', orderRef, '| Status:', status, '| Tracking:', trackingNumber);
+        console.log('Order:', orderRef, '| Label status:', labelStatus, '| Tracking:', trackingNumber);
 
-        // If label has been printed (status is Initiated or beyond)
-        if (status && status !== 'Created' && trackingNumber) {
+        // Label has been printed if status is Available or Expired
+        if ((labelStatus === 'Available' || labelStatus === 'Expired') && trackingNumber) {
           // Find Shopify order
           var ordersData = await shopifyAPI('/orders.json?name=' + encodeURIComponent('#' + orderRef) + '&status=any');
           var shopifyOrder = ordersData.orders && ordersData.orders[0];
 
           if (!shopifyOrder) {
             console.log('Shopify order not found for:', orderRef);
+            await markOrderFulfilled(orderRef);
             continue;
           }
 
@@ -241,6 +259,7 @@ async function pollForPrintedLabels() {
             }
           });
 
+          console.log('Fulfillment response:', JSON.stringify(fulfillmentRes));
           console.log('Fulfillment created for order:', orderRef, '| Tracking:', trackingNumber);
           await markOrderFulfilled(orderRef);
         }
@@ -258,9 +277,10 @@ async function pollForPrintedLabels() {
   }
 }
 
-// Polling paused - needs investigation
-// setInterval(pollForPrintedLabels, 5 * 60 * 1000);
-// setTimeout(pollForPrintedLabels, 10000);
+// Run polling every 5 minutes
+setInterval(pollForPrintedLabels, 5 * 60 * 1000);
+// Also run once on startup after a short delay
+setTimeout(pollForPrintedLabels, 10000);
 
 app.get('/', function(req, res) {
   var shop = req.query.shop;
