@@ -249,19 +249,47 @@ async function pollForPrintedLabels() {
             continue;
           }
 
-          // Create fulfillment with tracking
-          var fulfillmentRes = await shopifyAPI('/orders/' + shopifyOrder.id + '/fulfillments.json', 'POST', {
-            fulfillment: {
-              tracking_number: trackingNumber,
-              tracking_company: 'Australia Post',
-              tracking_url: 'https://auspost.com.au/mypost/track/#/details/' + trackingNumber,
-              notify_customer: true
-            }
-          });
+          // Get fulfillment orders first (required for modern Shopify API)
+var fulfillmentOrdersData = await shopifyAPI('/orders/' + shopifyOrder.id + '/fulfillment_orders.json');
+console.log('Fulfillment orders response:', JSON.stringify(fulfillmentOrdersData));
 
-          console.log('Fulfillment response:', JSON.stringify(fulfillmentRes));
-          console.log('Fulfillment created for order:', orderRef, '| Tracking:', trackingNumber);
-          await markOrderFulfilled(orderRef);
+var fulfillmentOrders = fulfillmentOrdersData.fulfillment_orders;
+if (!fulfillmentOrders || fulfillmentOrders.length === 0) {
+  console.log('No fulfillment orders found for:', orderRef);
+  continue;
+}
+
+// Filter to only open fulfillment orders
+var openFulfillmentOrders = fulfillmentOrders.filter(function(fo) {
+  return fo.status === 'open';
+});
+
+if (openFulfillmentOrders.length === 0) {
+  console.log('No open fulfillment orders for:', orderRef, '- marking as fulfilled');
+  await markOrderFulfilled(orderRef);
+  continue;
+}
+
+// Create fulfillment using the fulfillment orders API
+var lineItems = openFulfillmentOrders.map(function(fo) {
+  return { fulfillment_order_id: fo.id };
+});
+
+var fulfillmentRes = await shopifyAPI('/fulfillments.json', 'POST', {
+  fulfillment: {
+    line_items_by_fulfillment_order: lineItems,
+    tracking_info: {
+      number: trackingNumber,
+      company: 'Australia Post',
+      url: 'https://auspost.com.au/mypost/track/#/details/' + trackingNumber
+    },
+    notify_customer: true
+  }
+});
+
+console.log('Fulfillment response:', JSON.stringify(fulfillmentRes));
+console.log('Fulfillment created for order:', orderRef, '| Tracking:', trackingNumber);
+await markOrderFulfilled(orderRef);
         }
 
       } catch (err) {
