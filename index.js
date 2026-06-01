@@ -220,7 +220,7 @@ async function pollForPrintedLabels() {
         var shipment = shipmentData;
 
         if (!shipment || !shipment.shipment_id) {
-          console.log('No shipment found for ID:', shipmentId);
+          console.log('No shipment found for ID:', shipmentId, '| Response:', JSON.stringify(shipmentData));
           continue;
         }
 
