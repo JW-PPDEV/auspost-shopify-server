@@ -217,7 +217,7 @@ async function pollForPrintedLabels() {
           headers: auspostHeaders
         });
         var shipmentData = await shipmentRes.json();
-        var shipment = shipmentData;
+        var shipment = shipmentData.shipments && shipmentData.shipments[0];
 
         if (!shipment || !shipment.shipment_id) {
           console.log('No shipment found for ID:', shipmentId, '| Response:', JSON.stringify(shipmentData));
