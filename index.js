@@ -230,21 +230,19 @@ async function pollForPrintedLabels() {
 
         console.log('Order:', orderRef, '| Label status:', labelStatus, '| Tracking:', trackingNumber);
 
+        // Always check if already fulfilled in Shopify regardless of label status
+        var ordersData = await shopifyAPI('/orders.json?name=' + encodeURIComponent('#' + orderRef) + '&status=any');
+        var shopifyOrder = ordersData.orders && ordersData.orders[0];
+        if (shopifyOrder && shopifyOrder.fulfillment_status === 'fulfilled') {
+          console.log('Order already fulfilled in Shopify:', orderRef);
+          await markOrderFulfilled(orderRef);
+          continue;
+        }
+
         // Label has been printed if status is Available or Expired
         if ((labelStatus === 'Available' || labelStatus === 'Expired') && trackingNumber) {
-          // Find Shopify order
-          var ordersData = await shopifyAPI('/orders.json?name=' + encodeURIComponent('#' + orderRef) + '&status=any');
-          var shopifyOrder = ordersData.orders && ordersData.orders[0];
-
           if (!shopifyOrder) {
             console.log('Shopify order not found for:', orderRef);
-            await markOrderFulfilled(orderRef);
-            continue;
-          }
-
-          // Check if already fulfilled in Shopify
-          if (shopifyOrder.fulfillment_status === 'fulfilled') {
-            console.log('Order already fulfilled in Shopify:', orderRef);
             await markOrderFulfilled(orderRef);
             continue;
           }
